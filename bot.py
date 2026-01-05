@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from pathlib import Path
@@ -19,8 +20,17 @@ CHOOSING_ACTION, AWAITING_USERNAME = range(2)
 
 rate_limits: dict[str, list[float]] = {}
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    chat_id = str(update.effective_chat.id) if update.effective_chat else "unknown"
+    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
+    logger.info("start: chat_id=%s user_id=%s", chat_id, user_id)
     keyboard = [
         ["Проверка рейтинга", "Пользователи на мониторинге"],
         ["Добавить на мониторинг", "Удалить с мониторинга"],
@@ -35,6 +45,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     chat_id = str(update.effective_chat.id)
+    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
+    logger.info("choice: chat_id=%s user_id=%s text=%s", chat_id, user_id, text)
     if text == "Проверка рейтинга":
         context.user_data["action"] = "check"
         await update.message.reply_text("Введите ник пользователя")
@@ -75,7 +87,15 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     username = update.message.text.strip()
     chat_id = str(update.effective_chat.id)
+    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
     action = context.user_data.get("action")
+    logger.info(
+        "username: chat_id=%s user_id=%s action=%s username=%s",
+        chat_id,
+        user_id,
+        action,
+        username,
+    )
     session = SessionLocal()
     try:
         chat = session.query(Chat).filter_by(chat_id=chat_id).first()
@@ -89,19 +109,39 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             timestamps = [t for t in timestamps if now - t < 300]
             if len(timestamps) >= 5:
                 rate_limits[chat_id] = timestamps
+                logger.warning("rate_limit: chat_id=%s user_id=%s", chat_id, user_id)
                 await update.message.reply_text("Превышен лимит запросов")
                 return CHOOSING_ACTION
             timestamps.append(now)
             rate_limits[chat_id] = timestamps
             rating = await get_rating(username)
             if rating is None:
+                logger.warning(
+                    "rating_fetch_failed: chat_id=%s user_id=%s username=%s",
+                    chat_id,
+                    user_id,
+                    username,
+                )
                 await update.message.reply_text("Не удалось получить рейтинг")
             else:
+                logger.info(
+                    "rating_checked: chat_id=%s user_id=%s username=%s rating=%s",
+                    chat_id,
+                    user_id,
+                    username,
+                    rating,
+                )
                 await update.message.reply_text(f"Текущий рейтинг пользователя {username}: {rating}")
             return CHOOSING_ACTION
         if action == "add":
             current_count = len(chat.users)
             if current_count >= 10:
+                logger.warning(
+                    "monitor_limit: chat_id=%s user_id=%s username=%s",
+                    chat_id,
+                    user_id,
+                    username,
+                )
                 await update.message.reply_text("Достигнут лимит пользователей на мониторинге")
                 return CHOOSING_ACTION
             existing = (
@@ -110,12 +150,24 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 .first()
             )
             if existing:
+                logger.info(
+                    "monitor_exists: chat_id=%s user_id=%s username=%s",
+                    chat_id,
+                    user_id,
+                    username,
+                )
                 await update.message.reply_text("Пользователь уже на мониторинге")
                 return CHOOSING_ACTION
             rating = await get_rating(username)
             mu = MonitoredUser(chat_id=chat.id, username=username, last_rating=rating if rating is not None else None)
             session.add(mu)
             session.commit()
+            logger.info(
+                "monitor_added: chat_id=%s user_id=%s username=%s",
+                chat_id,
+                user_id,
+                username,
+            )
             await update.message.reply_text("Пользователь добавлен на мониторинг")
             return CHOOSING_ACTION
         if action == "remove":
@@ -125,10 +177,22 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 .first()
             )
             if not mu:
+                logger.info(
+                    "monitor_missing: chat_id=%s user_id=%s username=%s",
+                    chat_id,
+                    user_id,
+                    username,
+                )
                 await update.message.reply_text("Такой пользователь не найден")
                 return CHOOSING_ACTION
             session.delete(mu)
             session.commit()
+            logger.info(
+                "monitor_removed: chat_id=%s user_id=%s username=%s",
+                chat_id,
+                user_id,
+                username,
+            )
             await update.message.reply_text("Пользователь удален из мониторинга")
             return CHOOSING_ACTION
     finally:
