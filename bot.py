@@ -3,12 +3,10 @@ import os
 import time
 from pathlib import Path
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import (Application, ApplicationBuilder, CommandHandler,
-                          ConversationHandler, ContextTypes, MessageHandler,
-                          filters)
+from telegram.ext import (ApplicationBuilder, CommandHandler, ConversationHandler,
+                          ContextTypes, MessageHandler, filters)
 
 from db import Chat, MonitoredUser, init_db
 from rating_scraper import get_rating
@@ -138,7 +136,8 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CHOOSING_ACTION
 
 
-async def check_all_ratings(application: Application) -> None:
+async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
+    application = context.application
     session = SessionLocal()
     try:
         users = session.query(MonitoredUser).all()
@@ -171,9 +170,7 @@ def main() -> None:
         fallbacks=[CommandHandler("start", start)],
     )
     application.add_handler(conv_handler)
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_all_ratings, "interval", minutes=10, args=[application])
-    scheduler.start()
+    application.job_queue.run_repeating(check_all_ratings, interval=600, first=600)
     application.run_polling()
 
 
