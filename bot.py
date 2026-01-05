@@ -33,14 +33,31 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = str(update.effective_chat.id) if update.effective_chat else "unknown"
-    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
+    user = update.effective_user
+    user_id = str(user.id) if user else "unknown"
+    tg_username = user.username if user else None
+    greeting_name = f"@{tg_username}" if tg_username else (user.first_name if user else "друг")
     logger.info("start: chat_id=%s user_id=%s", chat_id, user_id)
+    session = SessionLocal()
+    try:
+        chat = session.query(Chat).filter_by(chat_id=chat_id).first()
+        if not chat:
+            chat = Chat(chat_id=chat_id, tg_username=tg_username)
+            session.add(chat)
+        else:
+            if tg_username:
+                chat.tg_username = tg_username
+        session.commit()
+    except Exception as exc:
+        logger.warning("start_db_update_failed: chat_id=%s user_id=%s error=%s", chat_id, user_id, exc)
+    finally:
+        session.close()
     keyboard = [
         ["Проверка рейтинга", "Пользователи на мониторинге"],
         ["Добавить на мониторинг", "Удалить с мониторинга"],
     ]
     await update.message.reply_text(
-        "Выберите действие",
+        f"Привет, {greeting_name}!\nВыберите действие",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False),
     )
     return CHOOSING_ACTION
@@ -104,7 +121,9 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     username = update.message.text.strip()
     chat_id = str(update.effective_chat.id)
-    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
+    user = update.effective_user
+    user_id = str(user.id) if user else "unknown"
+    tg_username = user.username if user else None
     action = context.user_data.get("action")
     logger.info(
         "username: chat_id=%s user_id=%s action=%s username=%s",
@@ -117,9 +136,12 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         chat = session.query(Chat).filter_by(chat_id=chat_id).first()
         if not chat:
-            chat = Chat(chat_id=chat_id)
+            chat = Chat(chat_id=chat_id, tg_username=tg_username)
             session.add(chat)
-            session.commit()
+        else:
+            if tg_username:
+                chat.tg_username = tg_username
+        session.commit()
         if action == "check":
             now = time.time()
             timestamps = rate_limits.get(chat_id, [])

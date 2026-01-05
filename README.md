@@ -21,8 +21,10 @@
 
    ```bash
    docker build -t hackerlab_bot .
-   docker run --env-file .env hackerlab_bot
+   docker run --env-file .env -v hackerlab_bot_data:/data hackerlab_bot
    ```
+
+   По умолчанию база данных хранится в `/data/data.db`. Для сохранения данных между пересборками используйте volume как в примере выше. При необходимости путь можно переопределить через `DB_URL`.
 
 Бот также можно запускать локально без Docker. Для этого установите зависимости (`pip install -r requirements.txt`) и запустите `python bot.py`.
 
