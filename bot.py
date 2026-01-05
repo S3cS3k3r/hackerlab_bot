@@ -2,7 +2,9 @@ import asyncio
 import logging
 import os
 import time
+from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, Update
@@ -17,6 +19,7 @@ load_dotenv()
 SessionLocal = init_db()
 
 CHOOSING_ACTION, AWAITING_USERNAME = range(2)
+MENU_CHOICE_REGEX = r"^(Проверка рейтинга|Пользователи на мониторинге|Добавить на мониторинг|Удалить с мониторинга)$"
 
 rate_limits: dict[str, list[float]] = {}
 
@@ -25,6 +28,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -58,8 +62,21 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             if not chat or not chat.users:
                 await update.message.reply_text("Список пуст")
             else:
-                lst = [u.username for u in chat.users]
-                await update.message.reply_text("На мониторинге:\n" + "\n".join(lst))
+                links = []
+                for user in chat.users:
+                    username = (user.username or "").strip()
+                    if not username:
+                        continue
+                    url = f"https://hackerlab.pro/users/{quote(username, safe='')}"
+                    links.append(f'<a href="{url}">{escape(username)}</a>')
+                if not links:
+                    await update.message.reply_text("Список пуст")
+                else:
+                    await update.message.reply_text(
+                        "На мониторинге:\n" + "\n".join(links),
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                    )
         finally:
             session.close()
         return CHOOSING_ACTION
@@ -226,7 +243,10 @@ def main() -> None:
         raise RuntimeError("BOT_TOKEN is not set")
     application = ApplicationBuilder().token(token).build()
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.Regex(MENU_CHOICE_REGEX), handle_choice),
+        ],
         states={
             CHOOSING_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_choice)],
             AWAITING_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username)],

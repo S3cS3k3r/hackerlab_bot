@@ -7,7 +7,7 @@
 1. Клонируйте репозиторий и перейдите в директорию проекта:
 
    ```bash
-   git clone <repository_url>
+   git clone https://github.com/S3cS3k3r/hackerlab_bot.git
    cd hackerlab_bot
    ```
 
