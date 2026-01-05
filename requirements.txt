@@ -1,0 +1,6 @@
+python-telegram-bot>=20.8
+apscheduler>=3.10.4
+sqlalchemy>=2.0
+beautifulsoup4>=4.12
+requests>=2.31
+python-dotenv>=1.0
