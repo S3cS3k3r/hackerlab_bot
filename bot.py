@@ -75,7 +75,7 @@ def _hackerlab_link(username: str) -> str:
     return f'<a href="{url}">{escape(safe_username)}</a>'
 
 
-async def _send_channel_message(application, text: str) -> None:
+async def _send_channel_message(application, text: str, *, silent: bool = False) -> None:
     if not LOG_CHANNEL_ID:
         return
     try:
@@ -84,6 +84,7 @@ async def _send_channel_message(application, text: str) -> None:
             text=text,
             parse_mode="HTML",
             disable_web_page_preview=True,
+            disable_notification=silent,
         )
     except Exception as exc:
         logger.error("channel_log_send_failed: chat_id=%s error=%s", LOG_CHANNEL_ID, exc)
@@ -393,6 +394,7 @@ async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_channel_message(
         application,
         f"Регулярная проверка: проверено {checked}, обновлено {changed}, ошибок {errors}",
+        silent=True,
     )
 
 
