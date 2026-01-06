@@ -12,6 +12,8 @@ class Chat(Base):
     id = Column(Integer, primary_key=True)
     chat_id = Column(String, unique=True, index=True)
     tg_username = Column(String)
+    first_name = Column(String)
+    last_name = Column(String)
     users = relationship("MonitoredUser", back_populates="chat", cascade="all, delete-orphan")
 
 
@@ -76,6 +78,10 @@ def _ensure_schema(engine) -> None:
         column_names = {row[1] for row in columns}
         if "tg_username" not in column_names:
             conn.execute(text("ALTER TABLE chats ADD COLUMN tg_username VARCHAR"))
+        if "first_name" not in column_names:
+            conn.execute(text("ALTER TABLE chats ADD COLUMN first_name VARCHAR"))
+        if "last_name" not in column_names:
+            conn.execute(text("ALTER TABLE chats ADD COLUMN last_name VARCHAR"))
 
 
 def get_engine(db_path: str | None = None):

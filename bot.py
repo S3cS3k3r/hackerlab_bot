@@ -20,36 +20,104 @@ SessionLocal = init_db()
 
 CHOOSING_ACTION, AWAITING_USERNAME = range(2)
 MENU_CHOICE_REGEX = r"^(Проверка рейтинга|Пользователи на мониторинге|Добавить на мониторинг|Удалить с мониторинга)$"
+LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID") or os.getenv("LOG_CHANNEL")
+LOG_CHANNEL_ID = LOG_CHANNEL_ID.strip() if LOG_CHANNEL_ID else None
 
 rate_limits: dict[str, list[float]] = {}
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.basicConfig(level=logging.CRITICAL)
+logging.disable(logging.CRITICAL)
+
+ACTION_LABELS = {
+    "start": "старт",
+    "check": "проверка рейтинга",
+    "add": "добавление в мониторинг",
+    "remove": "удаление из мониторинга",
+    "monitoring": "регулярная проверка",
+}
+
+
+def _format_full_name(first_name: str | None, last_name: str | None) -> str:
+    parts = [p for p in [first_name, last_name] if p]
+    return " ".join(parts).strip()
+
+
+def _tg_user_link(user=None, chat: Chat | None = None) -> str:
+    username = getattr(user, "username", None) or (chat.tg_username if chat else None)
+    first_name = getattr(user, "first_name", None) or (chat.first_name if chat else None)
+    last_name = getattr(user, "last_name", None) or (chat.last_name if chat else None)
+    user_id = getattr(user, "id", None) or (chat.chat_id if chat else None)
+
+    full_name = _format_full_name(first_name, last_name)
+    if username:
+        display = f"{full_name} (@{username})" if full_name else f"@{username}"
+        url = f"https://t.me/{quote(username, safe='')}"
+    else:
+        display = full_name or f"ID {user_id}" if user_id else "Пользователь"
+        url = f"tg://user?id={user_id}" if user_id else None
+
+    display = escape(display)
+    if url:
+        return f'<a href="{url}">{display}</a>'
+    return display
+
+
+def _hackerlab_link(username: str) -> str:
+    safe_username = username.strip()
+    url = f"https://hackerlab.pro/users/{quote(safe_username, safe='')}"
+    return f'<a href="{url}">{escape(safe_username)}</a>'
+
+
+async def _send_channel_message(application, text: str) -> None:
+    if not LOG_CHANNEL_ID:
+        return
+    try:
+        await application.bot.send_message(
+            chat_id=LOG_CHANNEL_ID,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        return
+
+
+async def _log_error(application, user, chat: Chat | None, action: str, detail: str) -> None:
+    user_link = _tg_user_link(user, chat)
+    action_label = ACTION_LABELS.get(action, action)
+    text = f"Ошибка: {user_link} — {detail} (действие: {escape(action_label)})"
+    await _send_channel_message(application, text)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = str(update.effective_chat.id) if update.effective_chat else "unknown"
     user = update.effective_user
-    user_id = str(user.id) if user else "unknown"
     tg_username = user.username if user else None
-    greeting_name = f"@{tg_username}" if tg_username else (user.first_name if user else "друг")
-    logger.info("start: chat_id=%s user_id=%s", chat_id, user_id)
+    first_name = user.first_name if user else None
+    last_name = user.last_name if user else None
+    greeting_name = f"@{tg_username}" if tg_username else _format_full_name(first_name, last_name) or "друг"
     session = SessionLocal()
     try:
         chat = session.query(Chat).filter_by(chat_id=chat_id).first()
         if not chat:
-            chat = Chat(chat_id=chat_id, tg_username=tg_username)
+            chat = Chat(chat_id=chat_id, tg_username=tg_username, first_name=first_name, last_name=last_name)
             session.add(chat)
         else:
             if tg_username:
                 chat.tg_username = tg_username
+            if first_name:
+                chat.first_name = first_name
+            if last_name:
+                chat.last_name = last_name
         session.commit()
-    except Exception as exc:
-        logger.warning("start_db_update_failed: chat_id=%s user_id=%s error=%s", chat_id, user_id, exc)
+    except Exception:
+        await _log_error(
+            context.application,
+            user,
+            None,
+            "start",
+            "не удалось сохранить данные пользователя",
+        )
     finally:
         session.close()
     keyboard = [
@@ -66,8 +134,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     chat_id = str(update.effective_chat.id)
-    user_id = str(update.effective_user.id) if update.effective_user else "unknown"
-    logger.info("choice: chat_id=%s user_id=%s text=%s", chat_id, user_id, text)
     if text == "Проверка рейтинга":
         context.user_data["action"] = "check"
         await update.message.reply_text("Введите ник пользователя")
@@ -122,25 +188,23 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     username = update.message.text.strip()
     chat_id = str(update.effective_chat.id)
     user = update.effective_user
-    user_id = str(user.id) if user else "unknown"
     tg_username = user.username if user else None
+    first_name = user.first_name if user else None
+    last_name = user.last_name if user else None
     action = context.user_data.get("action")
-    logger.info(
-        "username: chat_id=%s user_id=%s action=%s username=%s",
-        chat_id,
-        user_id,
-        action,
-        username,
-    )
     session = SessionLocal()
     try:
         chat = session.query(Chat).filter_by(chat_id=chat_id).first()
         if not chat:
-            chat = Chat(chat_id=chat_id, tg_username=tg_username)
+            chat = Chat(chat_id=chat_id, tg_username=tg_username, first_name=first_name, last_name=last_name)
             session.add(chat)
         else:
             if tg_username:
                 chat.tg_username = tg_username
+            if first_name:
+                chat.first_name = first_name
+            if last_name:
+                chat.last_name = last_name
         session.commit()
         if action == "check":
             now = time.time()
@@ -148,39 +212,30 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             timestamps = [t for t in timestamps if now - t < 300]
             if len(timestamps) >= 5:
                 rate_limits[chat_id] = timestamps
-                logger.warning("rate_limit: chat_id=%s user_id=%s", chat_id, user_id)
                 await update.message.reply_text("Превышен лимит запросов")
                 return CHOOSING_ACTION
             timestamps.append(now)
             rate_limits[chat_id] = timestamps
             rating = await get_rating(username)
             if rating is None:
-                logger.warning(
-                    "rating_fetch_failed: chat_id=%s user_id=%s username=%s",
-                    chat_id,
-                    user_id,
-                    username,
+                await _log_error(
+                    context.application,
+                    user,
+                    chat,
+                    "check",
+                    f"не удалось получить рейтинг для {_hackerlab_link(username)}",
                 )
                 await update.message.reply_text("Не удалось получить рейтинг")
             else:
-                logger.info(
-                    "rating_checked: chat_id=%s user_id=%s username=%s rating=%s",
-                    chat_id,
-                    user_id,
-                    username,
-                    rating,
+                await update.message.reply_text(
+                    f"Текущий рейтинг пользователя {_hackerlab_link(username)}: {rating}",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
                 )
-                await update.message.reply_text(f"Текущий рейтинг пользователя {username}: {rating}")
             return CHOOSING_ACTION
         if action == "add":
             current_count = len(chat.users)
             if current_count >= 10:
-                logger.warning(
-                    "monitor_limit: chat_id=%s user_id=%s username=%s",
-                    chat_id,
-                    user_id,
-                    username,
-                )
                 await update.message.reply_text("Достигнут лимит пользователей на мониторинге")
                 return CHOOSING_ACTION
             existing = (
@@ -189,24 +244,20 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 .first()
             )
             if existing:
-                logger.info(
-                    "monitor_exists: chat_id=%s user_id=%s username=%s",
-                    chat_id,
-                    user_id,
-                    username,
-                )
                 await update.message.reply_text("Пользователь уже на мониторинге")
                 return CHOOSING_ACTION
             rating = await get_rating(username)
+            if rating is None:
+                await _log_error(
+                    context.application,
+                    user,
+                    chat,
+                    "add",
+                    f"не удалось получить рейтинг для {_hackerlab_link(username)}",
+                )
             mu = MonitoredUser(chat_id=chat.id, username=username, last_rating=rating if rating is not None else None)
             session.add(mu)
             session.commit()
-            logger.info(
-                "monitor_added: chat_id=%s user_id=%s username=%s",
-                chat_id,
-                user_id,
-                username,
-            )
             await update.message.reply_text("Пользователь добавлен на мониторинг")
             return CHOOSING_ACTION
         if action == "remove":
@@ -216,22 +267,10 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 .first()
             )
             if not mu:
-                logger.info(
-                    "monitor_missing: chat_id=%s user_id=%s username=%s",
-                    chat_id,
-                    user_id,
-                    username,
-                )
                 await update.message.reply_text("Такой пользователь не найден")
                 return CHOOSING_ACTION
             session.delete(mu)
             session.commit()
-            logger.info(
-                "monitor_removed: chat_id=%s user_id=%s username=%s",
-                chat_id,
-                user_id,
-                username,
-            )
             await update.message.reply_text("Пользователь удален из мониторинга")
             return CHOOSING_ACTION
     finally:
@@ -242,21 +281,59 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
     application = context.application
     session = SessionLocal()
+    checked = 0
+    changed = 0
+    errors = 0
     try:
         users = session.query(MonitoredUser).all()
         for user in users:
-            new_rating = await get_rating(user.username)
+            checked += 1
+            try:
+                new_rating = await get_rating(user.username)
+            except Exception:
+                errors += 1
+                await _log_error(
+                    application,
+                    None,
+                    user.chat,
+                    "monitoring",
+                    f"ошибка получения рейтинга для {_hackerlab_link(user.username)}",
+                )
+                continue
             if new_rating is None:
+                errors += 1
+                await _log_error(
+                    application,
+                    None,
+                    user.chat,
+                    "monitoring",
+                    f"не удалось получить рейтинг для {_hackerlab_link(user.username)}",
+                )
                 continue
             if user.last_rating is None or new_rating != user.last_rating:
                 user.last_rating = new_rating
                 session.commit()
-                await application.bot.send_message(
-                    chat_id=user.chat.chat_id,
-                    text=f"Рейтинг пользователя {user.username} изменился: {new_rating}",
-                )
+                changed += 1
+                try:
+                    await application.bot.send_message(
+                        chat_id=user.chat.chat_id,
+                        text=f"Рейтинг пользователя {user.username} изменился: {new_rating}",
+                    )
+                except Exception:
+                    errors += 1
+                    await _log_error(
+                        application,
+                        None,
+                        user.chat,
+                        "monitoring",
+                        f"не удалось отправить уведомление для {_hackerlab_link(user.username)}",
+                    )
     finally:
         session.close()
+    await _send_channel_message(
+        application,
+        f"Регулярная проверка: проверено {checked}, обновлено {changed}, ошибок {errors}",
+    )
 
 
 def main() -> None:
