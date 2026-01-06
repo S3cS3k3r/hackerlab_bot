@@ -25,8 +25,14 @@ LOG_CHANNEL_ID = LOG_CHANNEL_ID.strip() if LOG_CHANNEL_ID else None
 
 rate_limits: dict[str, list[float]] = {}
 
-logging.basicConfig(level=logging.CRITICAL)
-logging.disable(logging.CRITICAL)
+logging.basicConfig(
+    level=logging.ERROR,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.CRITICAL)
+logging.getLogger("telegram").setLevel(logging.CRITICAL)
+logging.getLogger("apscheduler").setLevel(logging.CRITICAL)
 
 ACTION_LABELS = {
     "start": "старт",
@@ -78,8 +84,8 @@ async def _send_channel_message(application, text: str) -> None:
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-    except Exception:
-        return
+    except Exception as exc:
+        logger.error("channel_log_send_failed: chat_id=%s error=%s", LOG_CHANNEL_ID, exc)
 
 
 async def _log_error(application, user, chat: Chat | None, action: str, detail: str) -> None:
@@ -87,6 +93,12 @@ async def _log_error(application, user, chat: Chat | None, action: str, detail: 
     action_label = ACTION_LABELS.get(action, action)
     text = f"Ошибка: {user_link} — {detail} (действие: {escape(action_label)})"
     await _send_channel_message(application, text)
+
+
+async def _post_init(application) -> None:
+    if not LOG_CHANNEL_ID:
+        return
+    await _send_channel_message(application, "Логи: бот запущен")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -340,7 +352,7 @@ def main() -> None:
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise RuntimeError("BOT_TOKEN is not set")
-    application = ApplicationBuilder().token(token).build()
+    application = ApplicationBuilder().token(token).post_init(_post_init).build()
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),

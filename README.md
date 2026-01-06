@@ -15,18 +15,24 @@
 
    ```env
    BOT_TOKEN=ваш_токен_бота
+   LOG_CHANNEL_ID=-1001234567890
    ```
 
 3. Соберите и запустите контейнер Docker:
 
    ```bash
    docker build -t hackerlab_bot .
-   docker run --env-file .env -v hackerlab_bot_data:/data hackerlab_bot
+   docker run -d --restart=unless-stopped --name hackerlab_bot \
+     --env-file .env -v hackerlab_bot_data:/data hackerlab_bot
    ```
 
    По умолчанию база данных хранится в `/data/data.db`. Для сохранения данных между пересборками используйте volume как в примере выше. При необходимости путь можно переопределить через `DB_URL` или `DB_PATH`.
 
 Бот также можно запускать локально без Docker. В этом случае база по умолчанию создаётся в `~/.local/share/hackerlab_bot/data.db`, чтобы не попадать в Git. Для этого установите зависимости (`pip install -r requirements.txt`) и запустите `python bot.py`.
+
+### Логи
+
+Бот отправляет логи только в канал Telegram: ошибки пользовательских запросов, статус регулярных проверок рейтингов и сообщение о запуске. Укажите `LOG_CHANNEL_ID` (или `LOG_CHANNEL`) и добавьте бота в администраторы канала. В stdout сохраняются только ошибки доставки логов в канал.
 
 ## Использование
 
