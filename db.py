@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -24,11 +25,44 @@ class MonitoredUser(Base):
     __table_args__ = (UniqueConstraint("chat_id", "username", name="chat_username_uc"),)
 
 
+def _sqlite_url(path: Path | str) -> str:
+    path_str = str(path)
+    return f"sqlite:///{path_str}"
+
+
+def _default_sqlite_path() -> Path:
+    env_dir = os.getenv("DB_DIR") or os.getenv("HACKERLAB_BOT_DATA_DIR")
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    data_dir = Path("/data")
+    if data_dir.exists():
+        candidates.append(data_dir)
+    xdg_home = os.getenv("XDG_DATA_HOME")
+    if xdg_home:
+        candidates.append(Path(xdg_home) / "hackerlab_bot")
+    candidates.append(Path.home() / ".local" / "share" / "hackerlab_bot")
+    candidates.append(Path("/tmp") / "hackerlab_bot")
+    for base_dir in candidates:
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if os.access(base_dir, os.W_OK):
+            return base_dir / "data.db"
+    return Path("data.db")
+
+
 def _resolve_db_url(db_path: str | None = None) -> str:
     if db_path:
         return db_path
     env_url = os.getenv("DB_URL") or os.getenv("DATABASE_URL")
-    return env_url or "sqlite:///data.db"
+    if env_url:
+        return env_url
+    env_path = os.getenv("DB_PATH")
+    if env_path:
+        return _sqlite_url(Path(env_path).expanduser())
+    return _sqlite_url(_default_sqlite_path())
 
 
 def _ensure_schema(engine) -> None:
