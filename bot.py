@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import os
 import time
@@ -42,6 +43,18 @@ ACTION_LABELS = {
     "list": "список мониторинга",
     "monitoring": "регулярная проверка",
 }
+
+BOT_DESCRIPTION = (
+    "Этот проект представляет собой Telegram-бота, который отслеживает изменения рейтинга "
+    "пользователей на сайте hackerlab.pro. Бот может проверять рейтинг по запросу, "
+    "добавлять пользователей на регулярный мониторинг, выводить список отслеживаемых "
+    "пользователей и удалять их из мониторинга. Мониторинг выполняется каждые 10 минут. "
+    "Для одного чата можно поставить на мониторинг не более 10 пользователей, а разовые "
+    "проверки ограничены пятью за пять минут."
+)
+
+DAILY_STATS = {"checked": 0, "changed": 0, "errors": 0}
+DAILY_STATS_LOCK = asyncio.Lock()
 
 
 def _format_full_name(first_name: str | None, last_name: str | None) -> str:
@@ -107,6 +120,27 @@ async def _log_action(application, user, chat: Chat | None, action: str, detail:
     await _send_channel_message(application, text)
 
 
+async def _record_daily_stats(checked: int, changed: int, errors: int) -> None:
+    async with DAILY_STATS_LOCK:
+        DAILY_STATS["checked"] += checked
+        DAILY_STATS["changed"] += changed
+        DAILY_STATS["errors"] += errors
+
+
+async def _send_daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    async with DAILY_STATS_LOCK:
+        stats = dict(DAILY_STATS)
+        DAILY_STATS["checked"] = 0
+        DAILY_STATS["changed"] = 0
+        DAILY_STATS["errors"] = 0
+    await _send_channel_message(
+        context.application,
+        f"Сводка за сутки: проверено {stats['checked']}, "
+        f"обновлено {stats['changed']}, ошибок {stats['errors']}",
+        silent=True,
+    )
+
+
 async def _post_init(application) -> None:
     if not LOG_CHANNEL_ID:
         return
@@ -150,7 +184,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ["Добавить на мониторинг", "Удалить с мониторинга"],
     ]
     await update.message.reply_text(
-        f"Привет, {greeting_name}!\nВыберите действие",
+        f"Привет, {greeting_name}!\n\n{BOT_DESCRIPTION}\n\nВыберите действие",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False),
     )
     return CHOOSING_ACTION
@@ -368,17 +402,20 @@ async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
                 continue
             if user.last_rating is None or new_rating != user.last_rating:
                 old_rating = user.last_rating
+                user_link = _hackerlab_link(user.username)
                 user.last_rating = new_rating
                 session.commit()
                 changed += 1
                 try:
                     if old_rating is None:
-                        message = f"Рейтинг пользователя {user.username}: {new_rating}"
+                        message = f"Рейтинг пользователя {user_link}: {new_rating}"
                     else:
-                        message = f"Рейтинг пользователя {user.username} изменился: {old_rating} -> {new_rating}"
+                        message = f"Рейтинг пользователя {user_link} изменился: {old_rating} -> {new_rating}"
                     await application.bot.send_message(
                         chat_id=user.chat.chat_id,
                         text=message,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
                     )
                 except Exception:
                     errors += 1
@@ -391,11 +428,7 @@ async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
                     )
     finally:
         session.close()
-    await _send_channel_message(
-        application,
-        f"Регулярная проверка: проверено {checked}, обновлено {changed}, ошибок {errors}",
-        silent=True,
-    )
+    await _record_daily_stats(checked, changed, errors)
 
 
 def main() -> None:
@@ -416,6 +449,7 @@ def main() -> None:
     )
     application.add_handler(conv_handler)
     application.job_queue.run_repeating(check_all_ratings, interval=600, first=600)
+    application.job_queue.run_daily(_send_daily_summary, time=datetime.time(hour=13, minute=0))
     application.run_polling()
 
 
