@@ -184,7 +184,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ["Добавить на мониторинг", "Удалить с мониторинга"],
     ]
     await update.message.reply_text(
-        f"Привет, {greeting_name}!\n\n{BOT_DESCRIPTION}\n\nВыберите действие",
+        f"Привет, {greeting_name}!\n\n{BOT_DESCRIPTION}\n\nBy s3cs3k3r.ru\n\nВыберите действие",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False),
     )
     return CHOOSING_ACTION
