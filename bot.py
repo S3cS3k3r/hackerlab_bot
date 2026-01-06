@@ -39,6 +39,7 @@ ACTION_LABELS = {
     "check": "проверка рейтинга",
     "add": "добавление в мониторинг",
     "remove": "удаление из мониторинга",
+    "list": "список мониторинга",
     "monitoring": "регулярная проверка",
 }
 
@@ -95,6 +96,16 @@ async def _log_error(application, user, chat: Chat | None, action: str, detail: 
     await _send_channel_message(application, text)
 
 
+async def _log_action(application, user, chat: Chat | None, action: str, detail: str | None = None) -> None:
+    user_link = _tg_user_link(user, chat)
+    action_label = ACTION_LABELS.get(action, action)
+    if detail:
+        text = f"Действие: {user_link} — {escape(action_label)}: {detail}"
+    else:
+        text = f"Действие: {user_link} — {escape(action_label)}"
+    await _send_channel_message(application, text)
+
+
 async def _post_init(application) -> None:
     if not LOG_CHANNEL_ID:
         return
@@ -132,6 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
     finally:
         session.close()
+    await _log_action(context.application, user, None, "start")
     keyboard = [
         ["Проверка рейтинга", "Пользователи на мониторинге"],
         ["Добавить на мониторинг", "Удалить с мониторинга"],
@@ -152,6 +164,8 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return AWAITING_USERNAME
     if text == "Пользователи на мониторинге":
         session = SessionLocal()
+        chat = None
+        link_count = 0
         try:
             chat = session.query(Chat).filter_by(chat_id=chat_id).first()
             if not chat or not chat.users:
@@ -167,6 +181,7 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 if not links:
                     await update.message.reply_text("Список пуст")
                 else:
+                    link_count = len(links)
                     await update.message.reply_text(
                         "На мониторинге:\n" + "\n".join(links),
                         parse_mode="HTML",
@@ -174,6 +189,13 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                     )
         finally:
             session.close()
+        await _log_action(
+            context.application,
+            update.effective_user,
+            chat,
+            "list",
+            f"пользователей: {link_count}",
+        )
         return CHOOSING_ACTION
     if text == "Добавить на мониторинг":
         context.user_data["action"] = "add"
@@ -244,6 +266,13 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
+                await _log_action(
+                    context.application,
+                    user,
+                    chat,
+                    "check",
+                    f"{_hackerlab_link(username)} = {rating}",
+                )
             return CHOOSING_ACTION
         if action == "add":
             current_count = len(chat.users)
@@ -271,6 +300,13 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             session.add(mu)
             session.commit()
             await update.message.reply_text("Пользователь добавлен на мониторинг")
+            await _log_action(
+                context.application,
+                user,
+                chat,
+                "add",
+                _hackerlab_link(username),
+            )
             return CHOOSING_ACTION
         if action == "remove":
             mu = (
@@ -284,6 +320,13 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             session.delete(mu)
             session.commit()
             await update.message.reply_text("Пользователь удален из мониторинга")
+            await _log_action(
+                context.application,
+                user,
+                chat,
+                "remove",
+                _hackerlab_link(username),
+            )
             return CHOOSING_ACTION
     finally:
         session.close()
