@@ -366,13 +366,18 @@ async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
                 continue
             if user.last_rating is None or new_rating != user.last_rating:
+                old_rating = user.last_rating
                 user.last_rating = new_rating
                 session.commit()
                 changed += 1
                 try:
+                    if old_rating is None:
+                        message = f"Рейтинг пользователя {user.username}: {new_rating}"
+                    else:
+                        message = f"Рейтинг пользователя {user.username} изменился: {old_rating} -> {new_rating}"
                     await application.bot.send_message(
                         chat_id=user.chat.chat_id,
-                        text=f"Рейтинг пользователя {user.username} изменился: {new_rating}",
+                        text=message,
                     )
                 except Exception:
                     errors += 1
