@@ -244,8 +244,21 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             if not chat or not chat.users:
                 await update.message.reply_text("Список пуст")
                 return CHOOSING_ACTION
-            lst = [u.username for u in chat.users]
-            await update.message.reply_text("Введите ник пользователя для удаления:\n" + "\n".join(lst))
+            links = []
+            for user in chat.users:
+                username = (user.username or "").strip()
+                if not username:
+                    continue
+                url = f"https://hackerlab.pro/users/{quote(username, safe='')}"
+                links.append(f'<a href="{url}">{escape(username)}</a>')
+            if not links:
+                await update.message.reply_text("Список пуст")
+                return CHOOSING_ACTION
+            await update.message.reply_text(
+                "Введите ник пользователя для удаления:\n" + "\n".join(links),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
         finally:
             session.close()
         return AWAITING_USERNAME
@@ -331,6 +344,8 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     "add",
                     f"не удалось получить рейтинг для {_hackerlab_link(username)}",
                 )
+                await update.message.reply_text("Не удалось получить рейтинг")
+                return CHOOSING_ACTION
             mu = MonitoredUser(chat_id=chat.id, username=username, last_rating=rating if rating is not None else None)
             session.add(mu)
             session.commit()
