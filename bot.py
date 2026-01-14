@@ -400,32 +400,37 @@ async def check_all_ratings(context: ContextTypes.DEFAULT_TYPE) -> None:
                     f"не удалось получить рейтинг для {_hackerlab_link(user.username)}",
                 )
                 continue
-            if user.last_rating is None or new_rating != user.last_rating:
-                old_rating = user.last_rating
-                user_link = _hackerlab_link(user.username)
+            old_rating = user.last_rating
+            if old_rating is None:
                 user.last_rating = new_rating
                 session.commit()
                 changed += 1
-                try:
-                    if old_rating is None:
-                        message = f"Рейтинг пользователя {user_link}: {new_rating}"
-                    else:
-                        message = f"Рейтинг пользователя {user_link} изменился: {old_rating} -> {new_rating}"
-                    await application.bot.send_message(
-                        chat_id=user.chat.chat_id,
-                        text=message,
-                        parse_mode="HTML",
-                        disable_web_page_preview=True,
-                    )
-                except Exception:
-                    errors += 1
-                    await _log_error(
-                        application,
-                        None,
-                        user.chat,
-                        "monitoring",
-                        f"не удалось отправить уведомление для {_hackerlab_link(user.username)}",
-                    )
+                continue
+            if new_rating == old_rating:
+                continue
+            user.last_rating = new_rating
+            session.commit()
+            changed += 1
+            if new_rating >= old_rating:
+                continue
+            user_link = _hackerlab_link(user.username)
+            try:
+                message = f"Рейтинг пользователя {user_link} изменился: {old_rating} -> {new_rating}"
+                await application.bot.send_message(
+                    chat_id=user.chat.chat_id,
+                    text=message,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                errors += 1
+                await _log_error(
+                    application,
+                    None,
+                    user.chat,
+                    "monitoring",
+                    f"не удалось отправить уведомление для {_hackerlab_link(user.username)}",
+                )
     finally:
         session.close()
     await _record_daily_stats(checked, changed, errors)
